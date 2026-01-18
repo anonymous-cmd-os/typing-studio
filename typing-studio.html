@@ -1,0 +1,114 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<title>Typing Studio Pro</title>
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;600&family=JetBrains+Mono:wght@400;600&display=swap" rel="stylesheet">
+<style>
+:root{
+  --bg:#0b0e1a;
+  --panel:#151a33;
+  --accent:#7aa2ff;
+  --accent2:#5de4c7;
+  --text:#eef1ff;
+  --muted:#9aa0c3;
+  --error:#ff6b6b;
+}
+*{box-sizing:border-box;}
+body{margin:0;background:linear-gradient(135deg,#0b0e1a,#121742);color:var(--text);height:100vh;overflow:hidden;font-family:Inter,system-ui;}
+#app{width:100%;height:100%;display:flex;}
+.sidebar{width:260px;flex-shrink:0;background:rgba(21,26,51,.97);backdrop-filter:blur(14px);padding:20px;display:flex;flex-direction:column;gap:14px;position:absolute;left:0;top:0;bottom:0;z-index:10;transition:transform .35s ease;}
+.sidebar.hidden{transform:translateX(-100%);} 
+.main{flex:1;padding:22px;display:flex;flex-direction:column;gap:14px;margin-left:260px;transition:margin-left .35s ease;}
+.main.full{margin-left:0;} 
+.header{display:flex;align-items:center;gap:12px;}
+.timer{font-size:20px;font-family:JetBrains Mono;}
+.toggle{background:#0b0e1a;border:1px solid #2a2f55;color:var(--text);padding:6px 10px;border-radius:8px;cursor:pointer;} 
+.panel{background:rgba(21,26,51,.9);border-radius:18px;padding:18px;} 
+#textDisplay{line-height:1.9;font-size:18px;user-select:none;} 
+#textDisplay span.correct{color:var(--accent2);} 
+#textDisplay span.wrong{color:var(--error);text-decoration:underline;} 
+#textDisplay span.active{background:rgba(122,162,255,.25);border-radius:4px;} 
+#typingInput{width:100%;min-height:130px;background:#0b0e1a;border:none;color:var(--text);border-radius:14px;padding:14px;font-size:16px;font-family:JetBrains Mono;resize:none;} 
+.stats{display:flex;gap:18px;flex-wrap:wrap;color:var(--muted);} 
+.keyboard{display:grid;grid-template-columns:repeat(10,1fr);gap:6px;} 
+.key{background:#0b0e1a;padding:10px;text-align:center;border-radius:8px;font-size:13px;opacity:.5;} 
+.key.error{background:var(--error);color:#000;opacity:1;} 
+.key.finger{outline:2px solid var(--accent);} 
+canvas{width:100%;height:140px;background:#0b0e1a;border-radius:12px;} 
+.controls{display:flex;gap:10px;} 
+.controls button{background:linear-gradient(135deg,var(--accent),var(--accent2));border:none;padding:8px 14px;border-radius:10px;font-weight:600;cursor:pointer;color:#000;} 
+</style>
+</head>
+<body>
+<div id="app">
+  <div class="sidebar" id="sidebar">
+    <h2>Typing Studio Pro</h2>
+    <label>Profile</label>
+    <select id="profileSelect"></select>
+    <button onclick="addProfile()">Add Profile</button>
+    <label>Topic</label>
+    <select id="topicSelect"></select>
+    <label>Timer</label>
+    <select id="timeSelect"></select>
+    <label>Dictation Audio</label>
+    <input type="file" id="audioFile" accept="audio/*" />
+    <button onclick="loadText()">Load Text</button>
+  </div>
+  <div class="main" id="main">
+    <div class="header">
+      <button class="toggle" onclick="toggleSidebar()">☰</button>
+      <div class="timer" id="timer">00:00</div>
+      <div class="timer" id="stopwatch">00:00</div>
+      <div class="controls">
+        <button onclick="pauseTest()">Pause</button>
+        <button onclick="resumeTest()">Resume</button>
+        <button onclick="resetTest()">Reset</button>
+      </div>
+    </div>
+    <div class="panel" id="textDisplay"></div>
+    <textarea id="typingInput" placeholder="Start typing here..." disabled></textarea>
+    <div class="panel stats" id="stats"></div>
+    <div class="panel">
+      <h4>Per-Minute WPM</h4>
+      <canvas id="minuteGraph"></canvas>
+    </div>
+    <div class="panel">
+      <h4>Finger Placement Guide</h4>
+      <div class="keyboard" id="keyboard"></div>
+    </div>
+  </div>
+</div>
+<script>
+const sidebar=document.getElementById('sidebar');
+const main=document.getElementById('main');
+function toggleSidebar(){sidebar.classList.toggle('hidden');main.classList.toggle('full');}
+const keys="qwertyuiopasdfghjklzxcvbnm".split('');
+const fingerMap={q:'L5',w:'L4',e:'L3',r:'L2',t:'L1',y:'R1',u:'R2',i:'R3',o:'R4',p:'R5',a:'L5',s:'L4',d:'L3',f:'L2',g:'L1',h:'R1',j:'R2',k:'R3',l:'R4',z:'L5',x:'L4',c:'L3',v:'L2',b:'L1',n:'R1',m:'R2'};
+const keyboardEl=document.getElementById('keyboard');keys.forEach(k=>{let d=document.createElement('div');d.textContent=k.toUpperCase();d.className='key';d.id='key-'+k;keyboardEl.appendChild(d);});
+let profiles=JSON.parse(localStorage.getItem('profiles')||'{}');let currentProfile='Default';if(!profiles[currentProfile])profiles[currentProfile]=[];
+let topics=JSON.parse(localStorage.getItem('topics')||'{"Sample":"Sample typing text."}');
+const profileSelect=document.getElementById('profileSelect');const topicSelect=document.getElementById('topicSelect');const timeSelect=document.getElementById('timeSelect');const input=document.getElementById('typingInput');const textDisplay=document.getElementById('textDisplay');const statsEl=document.getElementById('stats');const timerEl=document.getElementById('timer');const stopwatchEl=document.getElementById('stopwatch');
+const canvas=document.getElementById('minuteGraph');const ctx=canvas.getContext('2d');
+let timerInterval,stopwatchInterval,startTime,timeLeft,started=false,paused=false,audio;let minuteData=[],minuteStart;
+function load(){profileSelect.innerHTML='';Object.keys(profiles).forEach(p=>{let o=document.createElement('option');o.textContent=p;profileSelect.appendChild(o);});topicSelect.innerHTML='';Object.keys(topics).forEach(t=>{let o=document.createElement('option');o.textContent=t;topicSelect.appendChild(o);});for(let i=1;i<=30;i++){let o=document.createElement('option');o.value=i;o.textContent=i+' min';timeSelect.appendChild(o);} }
+load();
+function addProfile(){let n=prompt('Profile name');if(!n)return;profiles[n]=[];localStorage.setItem('profiles',JSON.stringify(profiles));load();}
+function loadText(){resetTest();const text=topics[topicSelect.value];textDisplay.innerHTML='';text.split('').forEach((c,i)=>{let s=document.createElement('span');s.textContent=c;if(i===0)s.classList.add('active');textDisplay.appendChild(s);});input.disabled=false;input.focus();timeLeft=timeSelect.value*60;const file=document.getElementById('audioFile').files[0];if(file)audio=new Audio(URL.createObjectURL(file));}
+function startTimers(){startTime=Date.now();minuteStart=startTime;timerInterval=setInterval(()=>{if(!paused){timeLeft--;updateTimer();if(timeLeft<=0)finish();}},1000);stopwatchInterval=setInterval(()=>{if(!paused){let d=Math.floor((Date.now()-startTime)/1000);stopwatchEl.textContent=String(Math.floor(d/60)).padStart(2,'0')+':'+String(d%60).padStart(2,'0');if(Date.now()-minuteStart>=60000){minuteStart=Date.now();minuteData.push(currentWPM());drawMinuteGraph();}}},1000);if(audio)audio.play();}
+function pauseTest(){paused=true;if(audio)audio.pause();}
+function resumeTest(){paused=false;if(audio)audio.play();}
+function resetTest(){clearInterval(timerInterval);clearInterval(stopwatchInterval);input.value='';input.disabled=true;statsEl.textContent='';textDisplay.innerHTML='';timerEl.textContent='00:00';stopwatchEl.textContent='00:00';started=false;paused=false;minuteData=[];drawMinuteGraph();keys.forEach(k=>document.getElementById('key-'+k).className='key');}
+function updateTimer(){timerEl.textContent=String(Math.floor(timeLeft/60)).padStart(2,'0')+':'+String(timeLeft%60).padStart(2,'0');}
+function currentWPM(){let words=input.value.trim().split(/\s+/).filter(Boolean).length;let mins=(Date.now()-startTime)/60000||1;return Math.round(words/mins);} 
+input.addEventListener('input',()=>{if(!started){started=true;startTimers();}
+const spans=textDisplay.querySelectorAll('span');let correct=0;[...spans].forEach((s,i)=>{let t=input.value[i];s.classList.remove('correct','wrong','active');if(t==null){if(i===input.value.length)s.classList.add('active');}
+else if(t===s.textContent){s.classList.add('correct');correct++;}
+else{s.classList.add('wrong');let k=t?.toLowerCase();if(k){let el=document.getElementById('key-'+k);if(el){el.classList.add('error','finger');}}}});
+let wpm=currentWPM();let acc=Math.round((correct/spans.length)*100)||0;statsEl.textContent=`WPM: ${wpm} | Accuracy: ${acc}%`;});
+function finish(){input.disabled=true;clearInterval(timerInterval);clearInterval(stopwatchInterval);profiles[currentProfile].push(minuteData);localStorage.setItem('profiles',JSON.stringify(profiles));}
+function drawMinuteGraph(){ctx.clearRect(0,0,canvas.width,canvas.height);if(!minuteData.length)return;let max=Math.max(...minuteData);let step=canvas.width/(minuteData.length-1||1);ctx.strokeStyle='#7aa2ff';ctx.beginPath();minuteData.forEach((v,i)=>{let x=i*step;let y=canvas.height-(v/max)*(canvas.height-20)-10;if(i===0)ctx.moveTo(x,y);else ctx.lineTo(x,y);});ctx.stroke();}
+</script>
+</body>
+</html>
